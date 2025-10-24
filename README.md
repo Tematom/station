@@ -1,2 +1,3 @@
-# station
-AI automation project - sensor data collection and processing system.
+# Tematom Station
+IoT monitoring system with AI integration.
+*Project in active development*
