@@ -1,8 +1,11 @@
 `Tematom Station` — a hybrid software–hardware node that bridges real-world sensors, AI assistants, and human operators through AIPS.
 
-– Source of truth: this repository (`main` branch)  
+– Source of truth: this repository (`main` branch)
+
 – Canonical protocol: https://aips.tematom.com
+
 – Main Site: https://tematom.com (coming soon)
+
 - Main Site AI (AIPS) Verison: https://ai.tematom.com
 
 Station operates as the physical and logical endpoint of the Tematom ecosystem:
