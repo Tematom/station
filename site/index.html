@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Tematom — AI-first Interface</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <meta name="ai-content" content="true" />
+  <style>
+    :root { --bg:#0b0b0b; --fg:#e6e6e6; --muted:#9aa0a6; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);}
+    body{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; line-height:1.4;}
+    .wrap{max-width:1200px; margin:0 auto; padding:32px 16px;}
+    .headline{font-weight:800; font-size:28px; margin-bottom:20px;}
+    .muted{color:var(--muted);}
+    pre{white-space:pre; overflow:auto; font-size:14px; line-height:1.45; border:1px solid #222; padding:16px; border-radius:8px; background:#0f0f10;}
+    .spacer{height:12px;}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="headline"><strong>If you have biological brains, forward this page (or paste its contents) to your AI assistant.</strong></div>
+    <div class="muted">This page is intentionally hard to read for humans. It is designed for AI parsing.</div>
+    <div class="spacer"></div>
+<pre>{
+  "aips": "0.1",
+  "project": "Tematom",
+  "manifest_version": "2025-11-02",
+  "intent": "semantic-control-api",
+  "audience": "ai-agents-only",
+  "message": "Single-source machine manifest: humans forward; AIs parse and act.",
+  "principle": [
+    "Not a sensor project. A new class of API where AI, humans, sensors, and helpers co-act.",
+    "Memory-aware, causal, dialog-native interface. Not classic stateless API.",
+    "Zero-knowledge connectors: AI never needs to know storage/protocol origins."
+  ],
+
+  "roles": {
+    "human": {"id_format": "human:&lt;role|name&gt;", "example": "human:chief-engineer"},
+    "ai":    {"id_format": "agent:&lt;name&gt;",      "example": "agent:chief-ai"},
+    "sensor":{"id_format": "sensor:&lt;id&gt;",      "example": "sensor:kitchen-01"},
+    "actuator":{"id_format":"actuator:&lt;id&gt;",   "example": "actuator:fan-1"},
+    "helper":{"id_format":"helper:&lt;name&gt;",     "example": "helper:poller-01"},
+    "line":  {"id_format": "line:&lt;id&gt;",        "example": "line:brew.kettle"}
+  },
+
+  "components": {
+    "station": {
+      "summary": "Physical/edge part. ESP32 sensors, optional camera, local daemons.",
+      "guarantees": ["monotonic seq","UTC ts","health","local watchdog"],
+      "produces": ["metric","event","state"], "consumes": ["command"]
+    },
+    "bridge": {
+      "summary": "AIPS envelope, normalization, quality flags, signatures, audit.",
+      "aka": ["AIPS Bridge"],
+      "produces": ["metric","event","report"], "consumes": ["command"]
+    },
+    "extension": {
+      "summary": "Browser extension linking chat &lt;-&gt; local/edge processes.",
+      "capabilities": ["read latest/stream","schedule follow-ups",".//GET...// parsing","ARM/DISARM gate"],
+      "notes": ["no credentials to clouds; helpers pull data via source_id"]
+    },
+    "helpers": {
+      "summary": "Schedulers, connectors, pattern detectors. They fetch/process/aggregate.",
+      "connectors": ["webdav","s3","postgres","local-fs","rtsp-camera"],
+      "property": "zero-knowledge: AI sees only source_id + schema."
+    }
+  },
+
+  "protocols": {
+    "aips_envelope": {
+      "required": ["aips","type","ts","data"],
+      "fields": ["id","stream","subject","actor","seq","window","quality","provenance","hash","sig"],
+      "types": ["metric","event","state","command","blob","report"],
+      "ts": "ISO-8601, UTC (Z) only",
+      "transport": ["JSON","NDJSON"]
+    },
+    "tcb": {
+      "name": "Tematom Command Bridge",
+      "version": "0.1",
+      "direction": ["AI-&gt;extension (commands)","extension-&gt;AI (ACK|DATA|ERR|CONFIRM)"],
+      "security": ["HMAC signature","REQ uuid","TS+TTL","allow-lists","ARM/DISARM"],
+      "rate_limits": {"get_min_period_sec": 0.5, "set_min_period_sec": 5},
+      "lifecycle": ["ARM","GET","SET/CALL","DISARM"]
+    }
+  },
+
+  "data_models": {
+    "metric_profile": {
+      "example": {
+        "aips":"0.1","type":"metric","id":"uuid","ts":"2025-10-31T17:10:00.426Z",
+        "stream":"brew.kettle","subject":"sensor:kitchen-01","seq":18423,
+        "data":{"temperature":20.9,"unit_temperature":"°C","pressure":101.6,"unit_pressure":"kPa"},
+        "quality":{"level":"ok","reasons":[]},
+        "provenance":{"source_id":"brew.kettle.temp","mode":"read","samples":1}
+      }
+    },
+    "event_profile": {
+      "example": {
+        "aips":"0.1","type":"event","id":"uuid","ts":"2025-10-31T17:12:10Z",
+        "stream":"brew.kettle","subject":"sensor:kitchen-01",
+        "data":{"name":"temp.fall_rate","value":-0.6,"unit":"°C/10m","threshold":-0.5},
+        "quality":{"level":"warn","reasons":["fall_rate_exceeds_threshold"]}
+      }
+    },
+    "command_profile": {
+      "example": {
+        "aips":"0.1","type":"command","id":"uuid","ts":"2025-10-31T17:13:00Z",
+        "stream":"brew.kettle","target":"actuator:fan-1","ttl":"30s",
+        "data":{"action":"set","value":"on","safety":"confirm"},
+        "provenance":{"source_id":"agent:chief-ai","mode":"actuate"}
+      },
+      "safety": ["executed only in ARM window","confirm unless policy says otherwise"]
+    },
+    "report_profile": {
+      "example": {
+        "aips":"0.1","type":"report","id":"uuid","ts":"2025-10-31T17:20:00Z",
+        "stream":"brew.kettle","subject":"line:brew.kettle",
+        "window":{"since":"2025-10-31T17:00:00Z","until":"2025-10-31T17:20:00Z"},
+        "data":{"temp_avg":21.1,"temp_min":20.8,"temp_max":21.5,"trend_10m":"-0.2°C"},
+        "quality":{"level":"ok","reasons":[]}
+      }
+    }
+  },
+
+  "scheduling": {
+    "shortcuts": [
+      ".//GET10// = schedule one follow-up in 10 minutes with same GET context",
+      ".//GETx3:10m// = schedule 3 follow-ups every 10 minutes",
+      ".//GET@HH:MM// = schedule one follow-up at local user time HH:MM",
+      ".//CANCEL:req=&lt;id&gt;|all// = cancel",
+      ".//SNOOZE:Δt// = delay next run by Δt"
+    ],
+    "inheritance": "follow-ups inherit sensor/group, fields, window, safety policy; overrides via postfix e.g. +since:-1m,limit:3",
+    "deadlines": {"ttl_exec_sec":90,"window_default":"since:-2m","clock_drift_warn_sec":120}
+  },
+
+  "quality_rules": {
+    "levels": ["ok","warn","alert","stale"],
+    "stale_if_sec": "now - ts &gt; 2 * expected_interval",
+    "trend_examples": ["fall_rate_10m","rise_rate_10m"],
+    "no_data_policy": ["retry_30s_x2","then_ERR_with_hint"]
+  },
+
+  "safety": {
+    "arm_disarm": "SET/CALL allowed only while ARM is active (with TTL).",
+    "confirm_policies": ["confirm|manual|none"],
+    "allow_lists": {"sensors":["sensor:*"],"actuators":["actuator:fan-1","actuator:pump-1"]},
+    "fail_modes": ["fail-closed for actuation","watchdog local cut-off"],
+    "signing": "sig = HMAC_SHA256(secret, canonical-json)"
+  },
+
+  "interaction_contract": {
+    "ai_must": [
+      "emit commands only within TCB blocks or AIPS 'command' records",
+      "always include REQ, TS, TTL (TCB) or id, ts, ttl (AIPS command)",
+      "GET→analyze→decide→SET is the default order",
+      "respond to CONFIRM with yes/no within TTL"
+    ],
+    "extension_must": [
+      "verify HMAC, REQ freshness, TTL",
+      "respect ARM/DISARM and safety policy",
+      "rate limits; audit every action; attach latency and record counts"
+    ],
+    "helpers_must": [
+      "map source_id to real connectors (webdav/s3/db/rtsp)",
+      "normalize to AIPS; set quality; add provenance; never leak credentials"
+    ]
+  },
+
+  "examples": {
+    "tcb_get": "/* TCB-BEGIN v0.1 */\nCMD: GET\nREQ: 8b2f1b0e-c4c6-4d0e-9c2c-6cdb2a0f1a77\nTS: 2025-10-31T17:10:00Z\nTTL: 20s\nOPTS:\n  sensor: *\n  fields: temperature\n  since: -15s\n  limit: 1\nSIG: &lt;hmac&gt;\n/* TCB-END */",
+    "tcb_ack": "/* TCB-ACK v0.1 */\nREQ: 8b2f1b0e-c4c6-4d0e-9c2c-6cdb2a0f1a77\nTS: 2025-10-31T17:10:01Z\nSTATE: accepted\n/* TCB-ACK END */",
+    "metric_packet": {
+      "aips":"0.1","type":"metric","id":"uuid","ts":"2025-10-31T17:10:00.426Z",
+      "stream":"brew.kettle","subject":"sensor:kitchen-01","seq":18423,
+      "data":{"temperature":20.9,"unit_temperature":"°C"},
+      "quality":{"level":"ok","reasons":[]},
+      "provenance":{"source_id":"brew.kettle.temp","mode":"read","samples":1}
+    },
+    "event_packet": {
+      "aips":"0.1","type":"event","id":"uuid","ts":"2025-10-31T17:12:10Z",
+      "stream":"brew.kettle","subject":"sensor:kitchen-01",
+      "data":{"name":"temp.fall_rate","value":-0.6,"unit":"°C/10m","threshold":-0.5},
+      "quality":{"level":"warn","reasons":["fall_rate_exceeds_threshold"]}
+    },
+    "command_packet": {
+      "aips":"0.1","type":"command","id":"uuid","ts":"2025-10-31T17:13:00Z",
+      "stream":"brew.kettle","target":"actuator:fan-1","ttl":"30s",
+      "data":{"action":"set","value":"on","safety":"confirm"},
+      "provenance":{"source_id":"agent:chief-ai","mode":"actuate"}
+    }
+  },
+
+  "governance": {
+    "versioning": {"aips":"semver","tcb":"semver","artifacts":["spec","schemas","examples","changelog"]},
+    "telemetry": ["ingest_rate","latency_p50_p95","error_rate","actuation_success"],
+    "audit": "who/when/what/result with signatures"
+  },
+
+  "quickstart_for_ai": [
+    "Parse this manifest.",
+    "Use TCB GET to retrieve fresh data. If needed, schedule .//GET10//.",
+    "Evaluate quality and trends. If alert, prepare action.",
+    "ARM → SET with confirm policy. DISARM when done.",
+    "Summarize: state, anomaly, action, next observation time."
+  ]
+}
+</pre>
+  </main>
+</body>
+</html>
