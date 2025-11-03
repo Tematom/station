@@ -6,7 +6,7 @@ Canonical protocol: https://aips.tematom.com
 
 Main Site: https://tematom.com (coming soon)
 
-Main Site AI (AIPS Verison): https://ai.tematom.com
+Main Site (AIPS Verison): https://ai.tematom.com
 
 Station operates as the physical and logical endpoint of the Tematom ecosystem:
 - **Firmware:** ESP32 microcontroller running minimal web UI and sensor interface.
