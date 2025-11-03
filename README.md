@@ -1,4 +1,4 @@
-`Tematom Station` — a hybrid software–hardware node that bridges real-world sensors, AI assistants, and human operators through AIPS.
+Tematom Station - а hybrid software–hardware node that bridges real-world sensors, AI assistants, and human operators through AIPS.
 
 Source of truth: this repository (`main` branch)
 
