@@ -1,0 +1,209 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>
+#include <winhttp.h>
+
+#pragma comment(lib, "winhttp.lib")
+static HANDLE g_singleton_mutex = NULL;
+
+/* Вернёт 1 если это первый (единственный) экземпляр, 0 если уже запущен */
+int ensure_single_instance(void) {
+    /* Один из вариантов: глобально для всей машины (всех сеансов) */
+    const char* name_global = "Global\\TematomStation_v1";
+
+    /* Если хочешь ограничить в пределах текущего пользователя/сессии:
+       const char* name_global = "Local\\TematomStation_v1"; */
+
+    g_singleton_mutex = CreateMutexA(NULL, FALSE, name_global);
+    if (!g_singleton_mutex) {
+        /* На редкий случай отказа — можно попробовать Local\ как запасной вариант */
+        g_singleton_mutex = CreateMutexA(NULL, FALSE, "Local\\TematomStation_v1");
+        if (!g_singleton_mutex) {
+            fprintf(stderr, "[Tematom] Failed to create mutex (error %lu)\n", GetLastError());
+            return 0;
+        }
+    }
+
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        /* Экземпляр уже работает */
+        fprintf(stderr, "[Tematom] Station is already running. Exiting.\n");
+        CloseHandle(g_singleton_mutex);
+        g_singleton_mutex = NULL;
+        return 0;
+    }
+    return 1; /* мы — первый */
+}
+
+/* В конце жизни процесса освобождаем mutex (опционально — ОС сама почистит) */
+void release_single_instance(void) {
+    if (g_singleton_mutex) {
+        CloseHandle(g_singleton_mutex);
+        g_singleton_mutex = NULL;
+    }
+}
+
+typedef struct {
+    double temperature;
+    double humidity;
+    char ts[25];
+    long long ts_ms;
+} SensorData;
+
+int parse_json(const char* json, SensorData* data) {
+    const char* temp_ptr = strstr(json, "\"temperature\":");
+    const char* hum_ptr  = strstr(json, "\"humidity\":");
+    const char* ts_ptr   = strstr(json, "\"ts\":\"");
+    const char* ts_ms_ptr= strstr(json, "\"ts_ms\":");
+    
+    if (temp_ptr && hum_ptr && ts_ptr && ts_ms_ptr) {
+        sscanf(temp_ptr,  "\"temperature\":%lf", &data->temperature);
+        sscanf(hum_ptr,   "\"humidity\":%lf",   &data->humidity);
+        sscanf(ts_ptr,    "\"ts\":\"%24[^\"]",  data->ts);
+        // %lld для MSVC ок; при MinGW может понадобиться %I64d
+        sscanf(ts_ms_ptr, "\"ts_ms\":%lld",     &data->ts_ms);
+        return 1;
+    }
+    return 0;
+}
+
+char* https_get(const wchar_t* hostW, const wchar_t* pathW) {
+    HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
+    char* response = NULL;
+    DWORD dwSize = 0, dwDownloaded = 0;
+
+    // 1) Лучше без прокси на VPS
+    hSession = WinHttpOpen(L"Tematom Sensor Reader/1.0",
+                           WINHTTP_ACCESS_TYPE_NO_PROXY,
+                           WINHTTP_NO_PROXY_NAME,
+                           WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) goto cleanup;
+
+    // Немного таймаутов, чтобы не висело
+    DWORD t = 10000;
+    WinHttpSetTimeouts(hSession, t, t, t, t);
+
+    hConnect = WinHttpConnect(hSession, hostW, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) goto cleanup;
+
+    hRequest = WinHttpOpenRequest(hConnect, L"GET", pathW,
+                                  NULL, WINHTTP_NO_REFERER,
+                                  WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                  WINHTTP_FLAG_SECURE);
+    if (!hRequest) goto cleanup;
+
+    // 2) Явно включаем TLS 1.0/1.1/1.2 (минимум — 1.2)
+    DWORD prots = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1
+                | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_1
+                | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURE_PROTOCOLS, &prots, sizeof(prots));
+
+    // Если вдруг будет ошибка 12175 (SECURE_FAILURE), на время диагностики можно раскомментировать:
+    // DWORD sec = SECURITY_FLAG_IGNORE_UNKNOWN_CA
+    //           | SECURITY_FLAG_IGNORE_CERT_CN_INVALID
+    //           | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID
+    //           | SECURITY_FLAG_IGNORE_WRONG_USAGE;
+    // WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &sec, sizeof(sec));
+
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+        DWORD e = GetLastError();
+        wprintf(L"SendRequest failed, err=%lu\n", e);
+        goto cleanup;
+    }
+
+    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        DWORD e = GetLastError();
+        wprintf(L"ReceiveResponse failed, err=%lu\n", e);
+        goto cleanup;
+    }
+
+    DWORD dwTotalSize = 0;
+    for (;;) {
+        if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) {
+            DWORD e = GetLastError();
+            wprintf(L"QueryDataAvailable failed, err=%lu\n", e);
+            goto cleanup;
+        }
+        if (dwSize == 0) break;
+
+        char* tempBuffer = (char*)malloc(dwSize + 1);
+        if (!tempBuffer) goto cleanup;
+
+        if (!WinHttpReadData(hRequest, tempBuffer, dwSize, &dwDownloaded)) {
+            free(tempBuffer);
+            DWORD e = GetLastError();
+            wprintf(L"ReadData failed, err=%lu\n", e);
+            goto cleanup;
+        }
+
+        tempBuffer[dwDownloaded] = '\0';
+
+        char* new_response = (char*)realloc(response, dwTotalSize + dwDownloaded + 1);
+        if (!new_response) {
+            free(tempBuffer);
+            goto cleanup;
+        }
+        response = new_response;
+        memcpy(response + dwTotalSize, tempBuffer, dwDownloaded);
+        dwTotalSize += dwDownloaded;
+        response[dwTotalSize] = '\0';
+
+        free(tempBuffer);
+    }
+
+cleanup:
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    if (hSession) WinHttpCloseHandle(hSession);
+    
+    return response; // может быть NULL при ошибке
+}
+
+void write_to_file(const char* filename, const char* content) {
+    FILE* file = fopen(filename, "w");
+    if (file) {
+        fputs(content, file);
+        fclose(file);
+    }
+}
+
+int main(void) {
+    if (!ensure_single_instance()) {
+        return 0; /* тихо выходим — второй запуск */
+    }
+    printf("Tematom sensor monitor started\n");
+    printf("Connecting to sensor.tematom.com via HTTPS...\n");
+
+    while (1) {
+        // Важно: путь обязательно с ведущим слешем
+        char* body = https_get(L"sensor.tematom.com", L"/live.json");
+
+        if (body) {
+            // WinHTTP даёт УЖЕ ТЕЛО. Заголовков тут нет — сразу парсим JSON.
+            SensorData data;
+            if (parse_json(body, &data)) {
+                printf("Temperature: %.1fC, Humidity: %.1f%%, Time: %s\n",
+                       data.temperature, data.humidity, data.ts);
+
+                char output[512];
+                snprintf(output, sizeof(output),
+                         "{\"status\":\"ok\",\"data\":{\"temperature\":%.1f,\"humidity\":%.1f,\"ts\":\"%s\",\"ts_ms\":%lld}}",
+                         data.temperature, data.humidity, data.ts, data.ts_ms);
+                write_to_file("tematomdata.json", output);
+            } else {
+                printf("JSON parse error\n");
+                write_to_file("tematomdata.json", "{\"status\":\"error\",\"message\":\"DATA ERROR\"}");
+            }
+            free(body);
+        } else {
+            printf("HTTPS request failed\n");
+            write_to_file("tematomdata.json", "{\"status\":\"error\",\"message\":\"DATA ERROR\"}");
+        }
+
+        Sleep(10000); // 10 seconds
+    }
+   release_single_instance();
+
+    return 0;
+}
