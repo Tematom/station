@@ -1,0 +1,99 @@
+#include <windows.h>
+#include <stdint.h>
+
+#define NO_DATA_JSON "{\"status\":\"[BRIDGE]:NO DATA\"}"
+#define PREFIX_JSON   "{\"data\":"
+#define SUFFIX_JSON   "}"
+
+static void write_msg_to_stdout(const char* buf, uint32_t len) {
+    HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
+    /* [4 байта длины LE] затем данные */
+    WriteFile(hout, &len, 4, NULL, NULL);
+    WriteFile(hout, buf, len, NULL, NULL);
+}
+
+/* Прочистить stdin (Chrome Native Messaging) если там что-то есть */
+static void drain_stdin_if_present(void) {
+    HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD avail = 0;
+    if (!PeekNamedPipe(hin, NULL, 0, NULL, &avail, NULL) || avail < 4) return;
+
+    uint32_t mlen = 0;
+    DWORD rd = 0, got = 0;
+
+    ReadFile(hin, &mlen, 4, &rd, NULL); /* длина сообщения */
+
+    while (got < mlen) {
+        char buf[4096];
+        DWORD need = (DWORD)((mlen - got) < sizeof(buf) ? (mlen - got) : sizeof(buf));
+        if (!ReadFile(hin, buf, need, &rd, NULL) || rd == 0) break;
+        got += rd;
+    }
+}
+
+int main(void) {
+    drain_stdin_if_present();
+
+    HANDLE hf = CreateFileA("tematomdata.json", GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (hf == INVALID_HANDLE_VALUE) {
+        const char* s = NO_DATA_JSON;
+        write_msg_to_stdout(s, (uint32_t)lstrlenA(s));
+        return 0;
+    }
+
+    LARGE_INTEGER sizeli;
+    if (!GetFileSizeEx(hf, &sizeli) || sizeli.QuadPart <= 0 || sizeli.QuadPart > 16*1024*1024) {
+        CloseHandle(hf);
+        const char* s = NO_DATA_JSON;
+        write_msg_to_stdout(s, (uint32_t)lstrlenA(s));
+        return 0;
+    }
+
+    DWORD fsize = (DWORD)sizeli.QuadPart;
+    char* fbuf = (char*)HeapAlloc(GetProcessHeap(), 0, fsize);
+    if (!fbuf) {
+        CloseHandle(hf);
+        const char* s = NO_DATA_JSON;
+        write_msg_to_stdout(s, (uint32_t)lstrlenA(s));
+        return 0;
+    }
+
+    DWORD rd = 0, off = 0;
+    while (off < fsize) {
+        DWORD chunk = 0;
+        if (!ReadFile(hf, fbuf + off, fsize - off, &chunk, NULL) || chunk == 0) break;
+        off += chunk;
+    }
+    CloseHandle(hf);
+
+    if (off == 0) {
+        HeapFree(GetProcessHeap(), 0, fbuf);
+        const char* s = NO_DATA_JSON;
+        write_msg_to_stdout(s, (uint32_t)lstrlenA(s));
+        return 0;
+    }
+
+    const DWORD lp = (DWORD)lstrlenA(PREFIX_JSON);
+    const DWORD ls = (DWORD)lstrlenA(SUFFIX_JSON);
+    uint32_t out_len = lp + off + ls;
+
+    char* out = (char*)HeapAlloc(GetProcessHeap(), 0, out_len);
+    if (!out) {
+        HeapFree(GetProcessHeap(), 0, fbuf);
+        const char* s = NO_DATA_JSON;
+        write_msg_to_stdout(s, (uint32_t)lstrlenA(s));
+        return 0;
+    }
+
+    CopyMemory(out,             PREFIX_JSON, lp);
+    CopyMemory(out + lp,        fbuf,        off);
+    CopyMemory(out + lp + off,  SUFFIX_JSON, ls);
+
+    write_msg_to_stdout(out, out_len);
+
+    HeapFree(GetProcessHeap(), 0, out);
+    HeapFree(GetProcessHeap(), 0, fbuf);
+    return 0;
+}
